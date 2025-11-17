@@ -1,24 +1,39 @@
-FROM alpine:latest
+# ---- Builder Stage ----
+FROM rustlang/rust:nightly AS builder
 
-# Install required dependencies
-RUN apk add --no-cache \
-    git \
-    cargo \
-    rust \
-    musl-dev \
-    openssl-dev \
-    pkgconfig
+# Install git to clone the repo
+RUN apt-get update && apt-get install -y git && rm -rf /var/lib/apt/lists/*
 
 # Set working directory
 WORKDIR /app
 
-# Clone and build the project
-RUN git clone https://github.com/mjc/nntp-proxy.git && \
-    cd nntp-proxy && \
-    cargo build --release
+# Clone the nntp-proxy repository
+RUN git clone --branch main https://github.com/mjc/nntp-proxy.git .
 
-# Set the working directory to the cloned repo
-WORKDIR /app/nntp-proxy
+# Build the release binary
+RUN cargo build --release --bin nntp-proxy
 
-# The binary will be available at /app/nntp-proxy/target/release/nntp-proxy
-CMD ["/app/nntp-proxy/target/release/nntp-proxy"]
+# ---- Runtime Stage ----
+FROM debian:bookworm-slim
+
+# Create user and config folder
+RUN useradd --create-home --shell /bin/bash nntp-proxy
+RUN mkdir -p /etc/nntp-proxy
+
+# Copy the binary from builder stage
+COPY --from=builder /app/target/release/nntp-proxy /usr/local/bin/nntp-proxy
+
+# Copy configuration file (you must have this locally or in your Docker build context)
+COPY docker/config.yaml /etc/nntp-proxy/config.yaml
+
+# Set permissions
+RUN chown -R nntp-proxy:nntp-proxy /etc/nntp-proxy
+
+# Expose ports
+EXPOSE 8119 8993
+
+# Switch to non-root user
+USER nntp-proxy
+
+# Default entrypoint
+ENTRYPOINT ["/usr/local/bin/nntp-proxy", "--routing-mode", "standard", "--config", "/etc/nntp-proxy/config.yaml", "--port", "8119"]
